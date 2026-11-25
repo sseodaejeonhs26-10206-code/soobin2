@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>우리 반 랜덤 역할 뽑기 · 버전 2</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f6f0ff; color: #352548; font: 16px/1.6 system-ui, sans-serif; }
+    main { max-width: 850px; margin: 48px auto; padding: 24px; }
+    h1 { margin: 0; font-size: clamp(24px, 5vw, 34px); }
+    .intro { margin: 8px 0 28px; color: #655477; }
+    .inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    section { background: white; border: 1px solid #e0d0f3; border-radius: 16px; padding: 22px; box-shadow: 0 8px 24px #6d3bbd0d; }
+    label.title { display: block; font-size: 18px; font-weight: 700; }
+    .hint { margin: 6px 0 12px; color: #655477; font-size: 14px; }
+    textarea { width: 100%; min-height: 220px; resize: vertical; border: 1px solid #aa96c7; border-radius: 8px; padding: 12px; font: inherit; }
+    button { border: 0; border-radius: 9px; padding: 12px 22px; background: #6d3bbd; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+    button.secondary { background: #eadcfb; color: #4b287f; }
+    button:hover { filter: brightness(.94); }
+    :focus-visible { outline: 3px solid #9a57e5; outline-offset: 3px; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
+    #attendance { display: flex; gap: 8px 16px; flex-wrap: wrap; }
+    #attendance label { cursor: pointer; }
+    input[type=checkbox] { width: 18px; height: 18px; vertical-align: middle; accent-color: #6d3bbd; }
+    #message { min-height: 26px; margin: 12px 0; font-weight: 600; }
+    #message.error { color: #b52232; }
+    #result { margin-top: 20px; }
+    h2 { font-size: 22px; margin: 0 0 12px; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th, td { padding: 12px; border-bottom: 1px solid #e8ddf5; overflow-wrap: anywhere; }
+    th { background: #f1e8ff; }
+    footer { margin-top: 24px; color: #655477; font-size: 14px; }
+    [hidden] { display: none !important; }
+    @media (max-width: 600px) { main { margin: 12px auto; padding: 16px; } .inputs { grid-template-columns: 1fr; } }
+    @media print { body { background: white; } main { margin: 0; max-width: none; } .inputs, .actions, #message, footer, .intro { display: none; } section { border: 0; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>우리 반 랜덤 역할 뽑기 · 버전 2</h1>
+  <p class="intro">명단과 역할을 입력하고, 버튼 한 번으로 오늘의 역할을 정해요.</p>
+  <div class="inputs">
+    <section>
+      <label class="title" for="names">학생 명단</label>
+      <p class="hint" id="namesHelp">한 줄에 한 명씩 입력해요. 동명이인은 번호를 붙여 주세요.</p>
+      <textarea id="names" aria-describedby="namesHelp" placeholder="김민수&#10;이서연&#10;박지우"></textarea>
+      <p class="hint">결석한 학생을 체크하면 뽑기에서 제외해요.</p>
+      <div id="attendance" aria-label="결석 학생 선택"></div>
+    </section>
+    <section>
+      <label class="title" for="roles">역할 · 청소 구역</label>
+      <p class="hint" id="rolesHelp">한 줄에 한 자리씩 입력해요. 2명이 맡을 역할은 두 번 적어 주세요.</p>
+      <textarea id="roles" aria-describedby="rolesHelp" placeholder="칠판 정리&#10;창문 청소&#10;창문 청소"></textarea>
+      <p class="hint" id="counts"></p>
+    </section>
+  </div>
+  <div class="actions">
+    <button id="draw" type="button">역할 뽑기</button>
+    <button id="reset" type="button" class="secondary">초기화</button>
+    <button id="print" type="button" class="secondary" hidden>결과 인쇄 / PDF 저장</button>
+  </div>
+  <p id="message" role="status" aria-live="polite"></p>
+  <section id="result" hidden>
+    <h2>우리 반 배정 결과</h2>
+    <table><thead><tr><th scope="col">학생</th><th scope="col">역할</th></tr></thead><tbody id="rows"></tbody></table>
+  </section>
+  <footer>입력 내용과 결석 표시는 이 브라우저에 자동 저장됩니다. 공용 기기에서는 사용 후 입력 내용을 지워 주세요.</footer>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  const storageKey = 'class-random-roles-v2';
+  const absent = new Set();
+  // 줄바꿈이나 엑셀에서 복사한 탭으로 명단을 나눕니다.
+  const lines = text => text.split(/[\r\n\t]+/).map(s => s.trim()).filter(Boolean);
+
+  function tell(text, error = false) {
+    $('message').textContent = text;
+    $('message').classList.toggle('error', error);
+  }
+
+  function save() {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({
+        names: $('names').value, roles: $('roles').value, absent: [...absent]
+      }));
+    } catch {
+      tell('자동 저장을 사용할 수 없어요. 현재 화면에서 뽑기는 가능합니다.', true);
+    }
+  }
+
+  function updateCounts() {
+    const count = lines($('names').value).filter(name => !absent.has(name)).length;
+    $('counts').textContent = `참여 학생 ${count}명 · 역할 ${lines($('roles').value).length}자리`;
+  }
+
+  function clearResult() {
+    $('result').hidden = true;
+    $('print').hidden = true;
+    $('rows').replaceChildren();
+    $('draw').textContent = '역할 뽑기';
+    tell('');
+  }
+
+  function resetAll() {
+    $('names').value = '';
+    $('roles').value = '';
+    absent.clear();
+    clearResult();
+    renderAttendance();
+    updateCounts();
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {
+      tell('화면은 초기화됐지만 저장된 내용을 지우지 못했어요.', true);
+    }
+    $('names').focus();
+  }
+
+  function renderAttendance() {
+    const names = [...new Set(lines($('names').value))];
+    for (const name of absent) if (!names.includes(name)) absent.delete(name);
+    $('attendance').replaceChildren();
+    for (const name of names) {
+      const label = document.createElement('label');
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.checked = absent.has(name);
+      check.addEventListener('change', () => {
+        check.checked ? absent.add(name) : absent.delete(name);
+        clearResult();
+        updateCounts();
+        save();
+      });
+      label.append(check, document.createTextNode(` ${name}`));
+      $('attendance').append(label);
+    }
+  }
+
+  // 나머지 연산의 편향을 피한 난수로 Fisher–Yates 섞기를 합니다.
+  function randomInt(max) {
+    const value = new Uint32Array(1);
+    const limit = Math.floor(4294967296 / max) * max;
+    do { crypto.getRandomValues(value); } while (value[0] >= limit);
+    return value[0] % max;
+  }
+
+  $('draw').addEventListener('click', () => {
+    const names = lines($('names').value);
+    const roles = lines($('roles').value);
+    const duplicate = names.find((name, i) => names.indexOf(name) !== i);
+    const participants = names.filter(name => !absent.has(name));
+    if (duplicate) return tell(`중복된 이름: ${duplicate}. 번호나 구분 표시를 붙여 주세요.`, true);
+    if (!participants.length || !roles.length) return tell('참여 학생과 역할을 입력해 주세요.', true);
+    if (participants.length !== roles.length) return tell(`참여 학생 ${participants.length}명과 역할 ${roles.length}자리의 수를 같게 맞춰 주세요.`, true);
+    for (let i = roles.length - 1; i > 0; i--) {
+      const j = randomInt(i + 1);
+      [roles[i], roles[j]] = [roles[j], roles[i]];
+    }
+    $('rows').replaceChildren();
+    participants.forEach((name, i) => {
+      const row = document.createElement('tr');
+      for (const text of [name, roles[i]]) {
+        const cell = document.createElement('td');
+        cell.textContent = text;
+        row.append(cell);
+      }
+      $('rows').append(row);
+    });
+    $('result').hidden = false;
+    $('print').hidden = false;
+    $('draw').textContent = '다시 뽑기';
+    tell(`${participants.length}명의 역할을 배정했어요! 다시 뽑으면 같은 결과가 나올 수도 있어요.`);
+  });
+
+  for (const id of ['names', 'roles']) {
+    $(id).addEventListener('input', () => {
+      clearResult();
+      if (id === 'names') renderAttendance();
+      updateCounts();
+      save();
+    });
+  }
+  $('print').addEventListener('click', () => window.print());
+  $('reset').addEventListener('click', resetAll);
+
+  try {
+    const data = JSON.parse(localStorage.getItem(storageKey) || '{}');
+    $('names').value = typeof data.names === 'string' ? data.names : '';
+    $('roles').value = typeof data.roles === 'string' ? data.roles : '';
+    if (Array.isArray(data.absent)) data.absent.forEach(name => absent.add(name));
+  } catch { tell('저장된 내용을 불러오지 못했어요. 새로 입력해 주세요.', true); }
+  renderAttendance();
+  updateCounts();
+</script>
+</body>
+</html>
